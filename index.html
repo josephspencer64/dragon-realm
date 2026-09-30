@@ -1577,7 +1577,7 @@ const Game = {
     this.ri = ri; this.L = buildLevel(ri);
     const D = DRAGONS[save.dragon];
     this.p = { x: 170, y: 270, vx: 0, vy: 0, tx: 170, ty: 270, flap: 0, ang: 0, inv: 0, alive: true };
-    this.maxHearts = D.hearts; this.hearts = save.hearts == null ? D.hearts : clamp(save.hearts, 1, D.hearts); this.startHearts = this.hearts;
+    this.maxHearts = D.hearts; this.hearts = save.hearts == null ? D.hearts : clamp(save.hearts, 1, HEART_CAP); this.startHearts = this.hearts;
     this.cam = 0; this.eggs = 0; this.proj.length = 0; this.parts.length = 0; this.texts.length = 0;
     this.shake = 0; this.goalT = 0; this.overT = 0; this.combo = 0; this.celebrated = false; this.fireQueued = false;
     this.state = 'intro';
@@ -1709,7 +1709,9 @@ const Game = {
         if (Math.abs(e.x - f.x) > 60) continue;
         if (e.alive && (e.flyer || (e.kind === 'jumper' && e.state === 'jump')) && Math.hypot(e.x - f.x, e.y - f.y) < e.rad + 14) {
           e.alive = false; dead = true; Sound.poof(); this.burst(e.x, e.y, 18, ['#fff', '#ffe680', '#c8f0ff'], 'star');
-          if (this.hearts < this.maxHearts) { this.hearts++; this.text(e.x, e.y - 24, '+1 ♥', '#ff8fa3'); this.burst(e.x, e.y, 8, ['#ff5d73', '#ffb3c0'], 'spark'); setTimeout(() => Sound.heart(), 120); HUD.update(); HUD.heartPop(); }
+          const isFish = e.kind === 'jumper' && e.style !== 'lava';
+          if (isFish && this.hearts < HEART_CAP) { this.hearts++; this.text(e.x, e.y - 24, '+1 ♥ bonus!', '#ffd45c'); this.burst(e.x, e.y, 12, ['#ffd45c', '#ff5d73', '#fff'], 'star'); setTimeout(() => Sound.heart(), 120); HUD.update(); HUD.heartPop(); }
+          else if (!isFish && this.hearts < this.maxHearts) { this.hearts++; this.text(e.x, e.y - 24, '+1 ♥', '#ff8fa3'); this.burst(e.x, e.y, 8, ['#ff5d73', '#ffb3c0'], 'spark'); setTimeout(() => Sound.heart(), 120); HUD.update(); HUD.heartPop(); }
           else this.text(e.x, e.y - 24, 'Shoo!', '#fff');
           break;
         }
@@ -1827,13 +1829,14 @@ const Game = {
 function circleRect(c, b) { const nx = clamp(c.x, b.x, b.x + b.w), ny = clamp(c.y, b.y, b.y + b.h); return (c.x - nx) ** 2 + (c.y - ny) ** 2 < c.r * c.r; }
 
 // ---------------- HUD ----------------
-const HEART = f => `<svg viewBox="0 0 24 22"><path d="M12 21s-9-6-9-12.2C3 5.5 5.4 3 8.3 3c1.7 0 3 .8 3.7 2 .7-1.2 2-2 3.7-2C18.6 3 21 5.5 21 8.8 21 15 12 21 12 21z" fill="${f ? '#ff5d73' : 'rgba(255,255,255,.18)'}" stroke="${f ? '#fff' : 'rgba(255,255,255,.55)'}" stroke-width="1.8"/></svg>`;
+const HEART_CAP = 10; // fish can bank hearts above the dragon's normal maximum, up to this many
+const HEART = (f, gold) => `<svg viewBox="0 0 24 22"><path d="M12 21s-9-6-9-12.2C3 5.5 5.4 3 8.3 3c1.7 0 3 .8 3.7 2 .7-1.2 2-2 3.7-2C18.6 3 21 5.5 21 8.8 21 15 12 21 12 21z" fill="${f ? (gold ? '#ffc93c' : '#ff5d73') : 'rgba(255,255,255,.18)'}" stroke="${f ? '#fff' : 'rgba(255,255,255,.55)'}" stroke-width="1.8"/></svg>`;
 const HUD = {
   lastP: -1, lastH: '',
   show(on) { $('#hud').classList.toggle('hidden', !on); },
   update(pop) {
     $('#hudEggs').textContent = `${Game.eggs} / 15`;
-    let h = ''; for (let i = 0; i < Game.maxHearts; i++) h += HEART(i < Game.hearts);
+    let h = ''; for (let i = 0; i < Math.max(Game.maxHearts, Game.hearts); i++) h += HEART(i < Game.hearts, i >= Game.maxHearts);
     if (h !== this.lastH) { $('#hudHearts').innerHTML = h; this.lastH = h; }
     if (pop) { const e = $('#hudEggIco'); e.classList.remove('pop'); void e.offsetWidth; e.classList.add('pop'); }
     this.progress(Game.cam / Math.max(1, Game.L.nest.x - W * 0.7));
@@ -1924,6 +1927,7 @@ const UI = {
     else tip = 'Drag your finger anywhere to fly. Fire comes out by itself!';
     if (ri === 0) tip += ' A red ! means something is flying in.';
     if (ri === 0 || ri === 3) tip += ' Breathe fire on animals to shoo them away and win back a heart!';
+    if (REALMS[ri].skin.jumper && REALMS[ri].skin.jumper !== 'lava') tip += ' Hit a jumping fish with fire for a bonus gold heart you can save for later realms!';
     $('#introTip').textContent = tip;
     $('#introHearts').innerHTML = `${dragonName()} starts with ${this.heartsText(Game.hearts, Game.maxHearts)}`;
     this.show('intro');
@@ -1931,7 +1935,7 @@ const UI = {
   toggles(el) {
     el.innerHTML = `<button class="btn small ${save.music ? 'on' : 'alt'}" data-action="music">Music: ${save.music ? 'On' : 'Off'}</button><button class="btn small ${save.sfx ? 'on' : 'alt'}" data-action="sfx">Sounds: ${save.sfx ? 'On' : 'Off'}</button>`;
   },
-  heartsText(n, max) { return '♥'.repeat(n) + '<span style="opacity:.35">' + '♥'.repeat(Math.max(0, max - n)) + '</span>'; },
+  heartsText(n, max) { return '♥'.repeat(Math.min(n, max)) + '<span style="opacity:.35">' + '♥'.repeat(Math.max(0, max - n)) + '</span>' + (n > max ? '<span style="color:#ffc93c">' + '♥'.repeat(n - max) + '</span>' : ''); },
   showResult({ ri, got, newCh, newCrown, newBest }) {
     const R = REALMS[ri];
     $('#resKicker').textContent = R.name;

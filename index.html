@@ -59,6 +59,7 @@ p.small{font-size:max(12px,calc(15*var(--u)));opacity:.8}
 .dragons{display:grid;grid-template-columns:repeat(4,1fr);gap:calc(10*var(--u));margin:calc(10*var(--u)) 0}
 .dcard{font:inherit;color:#fff;cursor:pointer;background:rgba(255,255,255,.07);border:calc(3*var(--u)) solid rgba(255,255,255,.2);border-radius:calc(16*var(--u));
   padding:calc(6*var(--u)) calc(6*var(--u)) calc(8*var(--u));touch-action:manipulation}
+#riderList{margin:calc(4*var(--u)) 0}#riderList:empty{display:none}
 .dcard.sel{border-color:var(--gold);background:rgba(255,212,92,.14)}
 .dcard canvas{width:100%;aspect-ratio:5/3;display:block}
 .dcard b{display:block;font-size:max(15px,calc(21*var(--u)))}
@@ -94,6 +95,14 @@ p.small{font-size:max(12px,calc(15*var(--u)));opacity:.8}
 @keyframes turn{0%,25%{transform:rotate(0)}55%,100%{transform:rotate(90deg)}}
 #rotate p{font-size:20px}
 </style>
+<!-- Which menu opened this game (?hub=arcade) and who is playing (?player=Name). Save keys and the home button come from here. -->
+<script src="../gk-save.js"></script>
+<style>
+.gk-home{display:inline-flex;align-items:center;justify-content:center;gap:.4em;min-height:44px;padding:.55em 1.2em;margin:14px auto 0;border-radius:999px;
+  background:#fff;color:#2a2340;border:3px solid #2a2340;box-shadow:0 4px 0 #2a2340;font:inherit;font-weight:700;font-size:1rem;line-height:1;text-decoration:none;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.gk-home:active{transform:translateY(3px);box-shadow:0 1px 0 #2a2340}
+</style>
 </head>
 <body>
 <div id="stage">
@@ -111,6 +120,7 @@ p.small{font-size:max(12px,calc(15*var(--u)));opacity:.8}
       <h1>Dragon Realms</h1>
       <p>Fly your dragon. Find the lost eggs. Bring them home!</p>
       <p id="titleWho" class="small"></p>
+      <div class="row" id="riderList"></div>
       <div class="row">
         <button class="btn" data-action="play" data-primary>Play</button>
         <button class="btn alt" data-action="newRider" id="btnNewRider">New rider</button>
@@ -274,17 +284,63 @@ const REALMS = [
 ];
 REALMS.forEach((R, i) => { R.speed = 145 + 10 * i; R.length = 9000 + 250 * i; R.level = i / (REALMS.length - 1); });
 
-// ---- Save ----
-const SAVE_KEY = 'dragon-realms-v2';
-const save = (() => {
-  const def = { rider: '', dragonName: '', dragon: 'ember', unlocked: 1, totalEggs: 0, chalices: 0, crowns: [], best: [], music: true, sfx: true, control: 'drag', hearts: null };
-  try { const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (s) Object.assign(def, s); } catch (e) { }
+// ---- Save: one save per rider ----
+// Each rider gets their own save slot, so grandkids never share progress.
+// A launcher can pick the rider by link: index.html?player=Navy
+// Grandkid keys are unchanged. Arcade players keep their riders under their own arcade key (see gk-save.js).
+const LEGACY_KEY = 'dragon-realms-v2', ROSTER_KEY = GK_ARCADE ? gkKey('dragon-realms-riders') : 'dragon-realms-riders';
+const slotKey = n => GK_ARCADE ? gkKey(LEGACY_KEY + ':' + n.trim().toLowerCase()) : LEGACY_KEY + ':' + n.trim().toLowerCase();
+const cleanName = n => (n || '').trim().slice(0, GK_ARCADE ? 20 : 14);
+const escHtml = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function freshSave() { return { rider: '', dragonName: '', dragon: 'ember', unlocked: 1, totalEggs: 0, chalices: 0, crowns: [], best: [], music: true, sfx: true, control: 'drag', hearts: null }; }
+function normalizeSave(def) {
   if (!DRAGONS[def.dragon]) def.dragon = 'ember';
   for (let i = 0; i < REALMS.length; i++) { def.crowns[i] = !!def.crowns[i]; def.best[i] = def.best[i] || 0; }
   def.unlocked = clamp(def.unlocked || 1, 1, REALMS.length);
   return def;
+}
+function readJSON(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+function writeJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } }
+const roster = (() => {
+  const r = readJSON(ROSTER_KEY) || { list: [], current: '' };
+  if (!Array.isArray(r.list)) r.list = [];
+  // Carry over a save from the older one-rider version so nobody loses eggs.
+  if (!r.list.length && !GK_ARCADE) {
+    const old = readJSON(LEGACY_KEY);
+    if (old && cleanName(old.rider)) {
+      const n = cleanName(old.rider); old.rider = n;
+      writeJSON(slotKey(n), old); r.list.push(n); r.current = n; writeJSON(ROSTER_KEY, r);
+    }
+  }
+  return r;
 })();
-function writeSave() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { } }
+const HUB_PLAYER = GK_ARCADE ? GK_PLAYER : (() => { try { const q = new URLSearchParams(location.search); return cleanName(q.get('player') || q.get('name') || q.get('kid')); } catch (e) { return ''; } })();
+const findRider = n => roster.list.find(x => x.toLowerCase() === n.toLowerCase()) || '';
+const save = freshSave();
+function loadRider(name) {
+  for (const k of Object.keys(save)) delete save[k];
+  const n = cleanName(name), stored = n ? readJSON(slotKey(n)) : null;
+  Object.assign(save, freshSave(), stored || {});
+  if (n && !stored) save.rider = '';
+  normalizeSave(save);
+  try { Art.resetThumbs(); } catch (e) { } // Art is defined further down; skip on first load
+}
+function writeSave() {
+  if (!save.rider) return;
+  writeJSON(slotKey(save.rider), save);
+  if (!findRider(save.rider)) roster.list.push(save.rider);
+  roster.current = findRider(save.rider);
+  writeJSON(ROSTER_KEY, roster);
+}
+function removeRider(name) {
+  try { localStorage.removeItem(slotKey(name)); } catch (e) { }
+  roster.list = roster.list.filter(x => x.toLowerCase() !== name.toLowerCase());
+  roster.current = roster.list[0] || '';
+  writeJSON(ROSTER_KEY, roster);
+}
+// Launched from the game menu with a name: always that rider. Otherwise: whoever played last.
+if (HUB_PLAYER) { const n = findRider(HUB_PLAYER); loadRider(n || HUB_PLAYER); if (!n) save.rider = ''; }
+else loadRider(roster.current || '');
 const riderName = () => save.rider || 'Torin';
 const dragonName = () => save.dragonName || DRAGONS[save.dragon].name;
 
@@ -1847,7 +1903,7 @@ const HUD = {
 
 // ============ UI: menus, settings, boot ============
 const UI = {
-  cur: null, from: 'title', pickKey: save.dragon, msg: '',
+  cur: null, from: 'title', pickKey: save.dragon, msg: '', setupNew: false,
   show(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 'scr-' + id));
     this.cur = id;
@@ -1862,12 +1918,21 @@ const UI = {
   onResize() { if (this.cur === 'map') this.drawThumbs(); if (this.cur === 'setup') this.sizePreviews(); },
 
   fillTitle() {
-    $('#titleWho').textContent = save.rider ? `Welcome back, ${riderName()} and ${dragonName()}!` : '';
-    $('#btnNewRider').style.display = save.rider ? '' : 'none';
+    const list = $('#riderList');
+    if (HUB_PLAYER) {
+      $('#titleWho').textContent = save.rider ? `Welcome back, ${riderName()} and ${dragonName()}!` : `Hi, ${HUB_PLAYER}! Tap Play to meet your dragon.`;
+      list.innerHTML = ''; $('#btnNewRider').style.display = 'none';
+    } else {
+      $('#titleWho').textContent = save.rider ? `Welcome back, ${riderName()} and ${dragonName()}!` : (roster.list.length ? "Who's flying today?" : '');
+      list.innerHTML = roster.list.length > 1 || (roster.list.length && !save.rider) ? roster.list.map(n => `<button class="btn small${save.rider && n.toLowerCase() === save.rider.toLowerCase() ? ' on' : ' alt'}" data-action="pickRider" data-n="${escHtml(n)}">${escHtml(n)}</button>`).join('') : '';
+      $('#btnNewRider').style.display = roster.list.length ? '' : 'none';
+    }
     $('#titleHint').textContent = isTouch ? 'Drag your finger to fly. Fire comes out by itself!' : 'Arrow keys or WASD to fly · Space to breathe fire · P to pause';
   },
   fillSetup() {
-    $('#inRider').value = save.rider; $('#inDragon').value = save.dragonName; this.pickKey = save.dragon;
+    const r = $('#inRider');
+    r.value = HUB_PLAYER || (this.setupNew ? '' : save.rider); r.readOnly = !!HUB_PLAYER;
+    $('#inDragon').value = this.setupNew ? '' : save.dragonName; this.pickKey = this.setupNew ? 'ember' : save.dragon;
     $('#dragonCards').innerHTML = DRAGON_KEYS.map(k => { const D = DRAGONS[k];
       return `<button class="dcard${k === this.pickKey ? ' sel' : ''}" data-action="pick" data-k="${k}"><canvas></canvas><b>${D.name}</b><span>${D.desc}</span><i>${'♥'.repeat(D.hearts)}</i></button>`; }).join('');
     this.sizePreviews();
@@ -1911,7 +1976,7 @@ const UI = {
       if (save.control === 'tilt') h += `<p class="small">Hold the phone the way that feels comfy, then tap Recenter.</p><button class="btn small alt" data-action="recenter">Recenter tilt</button>`;
     }
     if (fsOK && isTouch) h += `<button class="btn small alt" data-action="fullscreen">Full screen</button>`;
-    if (this.cur === 'settings') h += `<button class="btn small alt" data-action="erase" id="btnErase">Erase all progress</button>`;
+    if (this.cur === 'settings') h += `<button class="btn small alt" data-action="erase" id="btnErase">Erase this rider</button>`;
     h += `<p class="small" id="setMsg">${this.msg}</p>`;
     el.innerHTML = h; this.msg = '';
   },
@@ -1974,14 +2039,23 @@ function goFullscreen() {
 }
 
 const ACTIONS = {
-  play() { if (save.rider) UI.show('map'); else UI.show('setup'); },
-  newRider() { UI.show('setup'); },
+  play() { if (save.rider) UI.show('map'); else { UI.setupNew = true; UI.show('setup'); } },
+  newRider() { UI.setupNew = true; UI.show('setup'); },
+  pickRider(b) { loadRider(b.dataset.n); writeSave(); UI.show('map'); },
   settings() { UI.from = UI.cur; UI.show('settings'); },
   settingsBack() { UI.show(UI.from === 'map' ? 'map' : 'title'); },
   toTitle() { UI.show('title'); },
   pick(b) { UI.pickKey = b.dataset.k; document.querySelectorAll('.dcard').forEach(c => c.classList.toggle('sel', c === b)); },
   setupDone() {
-    save.rider = $('#inRider').value.trim().slice(0, 14) || 'Torin';
+    const name = HUB_PLAYER || cleanName($('#inRider').value) || 'Torin', had = findRider(name);
+    if (had && UI.setupNew) {
+      // That name already has a save: open it instead of wiping it.
+      loadRider(had); writeSave(); UI.setupNew = false; document.activeElement && document.activeElement.blur && document.activeElement.blur();
+      UI.show('map'); return;
+    }
+    if (UI.setupNew) { loadRider(''); }
+    UI.setupNew = false;
+    save.rider = name;
     save.dragon = UI.pickKey;
     save.dragonName = $('#inDragon').value.trim().slice(0, 14) || DRAGONS[save.dragon].name;
     writeSave(); Art.resetThumbs(); document.activeElement && document.activeElement.blur && document.activeElement.blur();
@@ -2015,9 +2089,11 @@ const ACTIONS = {
   fullscreen() { goFullscreen(); },
   erase(b) {
     if (b.dataset.armed) {
-      Object.assign(save, { rider: '', dragonName: '', dragon: 'ember', unlocked: 1, totalEggs: 0, chalices: 0, crowns: REALMS.map(() => false), best: REALMS.map(() => 0) }); Art.resetThumbs();
-      writeSave(); UI.msg = 'Progress erased.'; UI.refreshSettings();
-    } else { b.dataset.armed = '1'; b.textContent = 'Tap again to erase everything'; }
+      const who = save.rider;
+      if (who) removeRider(who);
+      loadRider(HUB_PLAYER ? '' : roster.current);
+      UI.msg = who ? `${who}'s progress erased. Other riders are safe.` : 'Progress erased.'; UI.refreshSettings();
+    } else { b.dataset.armed = '1'; b.textContent = `Tap again to erase ${save.rider || 'this rider'}`; }
   },
   rotateOK() { rotateDismissed = true; checkOrientation(); }
 };
@@ -2047,6 +2123,9 @@ UI.show('title');
 Sound.play('title');
 requestAnimationFrame(frame);
 
+
+// Grandkid Games: button back to the menu
+(function(){ var a = gkHomeLink(); var r = document.querySelector('#scr-title .panel'); if (a && r){ var w = document.createElement('div'); w.appendChild(a); r.appendChild(w); } })();
 </script>
 </body>
 </html>
